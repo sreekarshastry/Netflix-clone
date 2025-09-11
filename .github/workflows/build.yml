@@ -1,8 +1,10 @@
-name: Build,Analyze,scan
+name: Build, Analyze, Scan
+
 on:
   push:
     branches:
       - main
+
 jobs:
   build-analyze-scan:
     name: Build
@@ -11,9 +13,40 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
         with:
-          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+          fetch-depth: 0  # Disable shallow clone for better SonarQube analysis
+
       - name: Build and analyze with SonarQube
         uses: sonarsource/sonarqube-scan-action@master
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+          
+      - name: Docker build and push
+        run: |
+          docker build --build-arg TMDB_V3_API_KEY=6e4115a0ecbfcc96978f1556ba120fd6 -t netflix .
+          docker tag netflix sreekargangu/netflix:latest
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+          docker push sreekargangu/netflix:latest
+
+  deploy:
+    name: Deploy
+    needs: build-analyze-scan
+    runs-on: [Arjun]
+    steps:
+      - name: Pull the Docker image
+        run: docker pull sreekargangu/netflix:latest
+
+      - name: Install Trivy
+        run: |
+          sudo apt-get update
+          sudo apt-get install wget apt-transport-https gnupg lsb-release -y
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+          sudo apt-get update
+          sudo apt-get install trivy -y
+
+      - name: Run Trivy Scan on Docker image
+        run: trivy image sreekargangu/netflix:latest
+
+      - name: Run the Netflix container
+        run: docker run -d --name netflix -p 8081:80 sreekargangu/netflix:latest
